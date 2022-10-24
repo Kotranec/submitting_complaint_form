@@ -2,7 +2,7 @@
     <div class="conteiner">        
         <div class="inputs">                        
             <form action="" class="form" @submit.prevent="submit">
-              <div class="head1">
+              <div class="complaint">
                 <div class="complaint-label">
                   Жалоба
                 </div>
@@ -60,8 +60,8 @@
                   required               
                 ></textarea>
               </div>                       
-              <div class="send-buttons">                              
-                <v-btn v-if="authorization"
+              <div class="send-buttons">
+                <v-btn 
                   class="ma-2"
                   :loading="loading"
                   :disabled="loading"
@@ -69,15 +69,6 @@
                   type="submit"
                 >
                   Применить
-                </v-btn>
-                <v-btn v-else
-                  class="ma-2"
-                  :loading="loading"
-                  :disabled="loading"
-                  color="primary"
-                  @click="dialog = true"
-                >
-                  Аваторизация
                 </v-btn>
                 <div class="fail">
                   {{fail}}
@@ -126,9 +117,9 @@
                         <v-btn
                           color="blue darken-1"
                           text
-                          @click="signIn"
+                          @click="sendSignIn"
                         >
-                          Отправить
+                          Отправить 
                         </v-btn>
                         <v-btn
                           color="blue darken-1"
@@ -155,13 +146,14 @@ export default {
 
   data() {
     return {      
-      polyclinics: ['Поликлиника 1', 'Поликлиника 2', 'Поликлиника 3', 'Поликлиника 4'],
-      types_info: ['Жалоба на врача 1', 'Жалоба на врача 2', 'Жалоба на врача 3', 'Жалоба на врача 4'],
+      polyclinics: ['Поликлиника 1', 'Поликлиника 2'],
+      types_info: ['Жалоба на врача 1', 'Жалоба на врача 2'],
 
       polyclinic: null,
       type_info: null,
       feedback_number: null,
       information: null,
+      dataFormIsComplited: false,      
 
       loading: false,
       authorization: false,
@@ -173,9 +165,13 @@ export default {
     }
   },
 
+  created: function() {
+    this.checkToken();
+  },
+
   methods: {
-    async signIn() {  
-      this.dialog = false;    
+    async signIn() {
+      this.fail = "";
       const tokenResponse = await fetch('http://176.124.136.35:8080/api/v1/token/', {
         method: 'POST',
         headers: {
@@ -186,22 +182,23 @@ export default {
           password: this.password
         })
       })
-
-      const tokenData = {...await tokenResponse.json(), tokenData: Date.now()};
       
       if (tokenResponse.status == 200) {
-        this.authorization = true;
+        const tokenData = {...await tokenResponse.json(), tokenDate: Date.now()};        
         saveSessionToken(tokenData);
-        this.completed = "Выполнено успешно";
-        setTimeout(() => this.completed = "", 3000);
+        this.authorization = true;
       } else {
-        this.fail = "Ошибка";
-        setTimeout(() => this.fail = "", 3000);
+        this.fail = "Ошибка при авторизации";
       }
+      this.dialog = false;
     },
 
-    async submit() {
-      if (!this.authorization) return null;    
+    async submit() {  
+      this.fail = "";
+      this.dataFormIsComplited = true;
+
+      await this.checkToken();      
+      if (!this.authorization) return null;
 
       const informationData = {
         patient: 1,
@@ -220,38 +217,92 @@ export default {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            'Authorization': `Bearer ${getSessionAccessToken()}`,
+            'Authorization': `Bearer ${getSessionAccessToken().access}`,            
           },
           body: JSON.stringify(informationData),
         }
       );
 
+      if (informationResponse.status == 401) {
+        this.authorization = false;
+        this.dialog = true;
+      }
+
       if (informationResponse.status == 201) {
         this.completed = "Выполнено успешно";
         setTimeout(() => this.completed = "", 3000);
       } else {
-        this.fail = "Ошибка";
-        setTimeout(() => this.fail = "", 3000);
+        this.fail = "Ошибка отправки формы";
       }
       this.loading = false;   
-    },    
+    },
+
+    async checkToken() {
+      if (!localStorage.tokenData) {  // No token
+        this.authorization = false;
+        this.dialog = true;
+        return false;        
+      }
+
+      const tokenDate = JSON.parse(localStorage.tokenData).tokenDate;
+      const tokenLifetime = 1740000 //token lifetime 30 min (so let's take 29 minutes)
+      const refreshLifetime = 86340000 //token lifetime 30 min (so let's take 29 minutes)
+      const dateNow = Date.now();      
+    
+      if (dateNow < (tokenDate + tokenLifetime)) {  // Token is fresh
+        this.authorization = true;
+        return true;
+      }
+
+      if (dateNow >= (tokenDate + refreshLifetime)) {  // refreshToken is not fresh
+        this.authorization = false;
+        this.dialog = true;
+        return false;
+      }
+
+      if (dateNow >= (tokenDate + tokenLifetime) && dateNow < (tokenDate + refreshLifetime)) {  //Token is not fresh, bat refreshToken still fresh
+        this.loading = true; 
+        const refreshResponse = await fetch(
+          "http://176.124.136.35:8080/api/v1/token/refresh/",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",          
+            },
+            body: JSON.stringify({refresh: getSessionRefreshToken()}),
+          }
+        );
+
+        if (refreshResponse.status == 200) {
+          const tokenData = {...await refreshResponse.json(), tokenDate: Date.now()};
+          saveSessionToken(tokenData);
+          this.authorization = true;
+          this.loading = false;
+          return true;
+        }
+      }    
+      this.authorization = false;
+      this.loading = false;
+      return false;
+    },
+
+    async sendSignIn() {
+      await this.signIn();
+      this.dataFormIsComplited && this.submit();
+    }
   }
 }
 
+function getSessionAccessToken() {  
+  return localStorage.tokenData && JSON.parse(localStorage.tokenData);  
+}
 function saveSessionToken(token) {
-  sessionStorage.setItem('tokenData', JSON.stringify(token));
+  localStorage.setItem('tokenData', JSON.stringify({...getSessionAccessToken(), ...token}));
 }
-function getSessionAccessToken() {
-  return sessionStorage.tokenData ? JSON.parse(sessionStorage.tokenData).access : null;
-}
-
-// reserve. need to implement refresh token
 function getSessionRefreshToken() {
-  return sessionStorage.tokenData ? JSON.parse(sessionStorage.tokenData).refresh : null;
-}
-    
+  return localStorage.tokenData && JSON.parse(localStorage.tokenData).refresh;
+}    
 </script>
-
 
 <style scoped>
 .conteiner {
@@ -272,10 +323,9 @@ function getSessionRefreshToken() {
     margin: 21px 8px 8px 8px;
 }
 
-.footer {
-    margin-left: 2px;
+.footer {    
     display: flex;
-    width: 1410px;
+    align-self: normal;
     height: 202px;
     background: white;
 }
@@ -371,7 +421,7 @@ function getSessionRefreshToken() {
   color: #FFFFFF;
 }
 
-.head1 {
+.complaint {
   display: flex;
   justify-content: space-between;
 }
